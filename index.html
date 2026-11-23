@@ -219,7 +219,9 @@ $("run").onclick = async () => {
     });
     log("Tanda tangan diterima ✓ Mengirim pembayaran ke DECA…");
 
-    const payload = { x402Version: 2, scheme: "exact", network: EXPECT.network, payload: { signature, authorization } };
+    const payload = { x402Version: 2, accepted: acc, payload: { signature, authorization } };
+    if (required.resource) payload.resource = required.resource;
+    log("Format muatan: x402 v2 dengan accepted requirements ✓");
     const b64 = btoa(JSON.stringify(payload));
     const paid = await api("/tests", {
       method: "POST",
