@@ -83,7 +83,7 @@ function fail(msg) { log("BERHENTI: " + msg); $("result").innerHTML = '<span cla
 async function api(path, opts = {}) {
   const key = $("apikey").value.trim();
   const headers = Object.assign({ "content-type": "application/json" }, opts.headers || {});
-  if (key) headers["authorization"] = "Bearer " + key;
+  if (key && !opts.noAuth) headers["authorization"] = "Bearer " + key;
   const res = await fetch(API + path, Object.assign({}, opts, { headers }));
   let body = null;
   try { body = await res.json(); } catch (e) { /* no json */ }
@@ -156,7 +156,13 @@ $("run").onclick = async () => {
 
     const testBody = { quote_id: quoteId, option, sandbox: true, idempotency_key: IDEMPOTENCY_KEY };
     log("Meminta tes sandbox (mengharapkan jawaban 402 berisi permintaan bayar)…");
-    const ask = await api("/tests", { method: "POST", body: JSON.stringify(testBody) });
+    let ask = await api("/tests", { method: "POST", body: JSON.stringify(testBody) });
+    let noAuth = false;
+    if (ask.status === 403 && ask.body && ask.body.error && ask.body.error.code === "scope_missing") {
+      log("Key ditolak DECA: scope Test belum terbuka untuk key manual. Mencoba ulang TANPA key — alur x402 resmi memang membolehkan pembayaran tanpa key…");
+      noAuth = true;
+      ask = await api("/tests", { method: "POST", body: JSON.stringify(testBody), noAuth: true });
+    }
     let required = ask.body;
     if (!required || !required.accepts) {
       const h = ask.headers.get("PAYMENT-REQUIRED");
@@ -217,7 +223,8 @@ $("run").onclick = async () => {
     const paid = await api("/tests", {
       method: "POST",
       headers: { "PAYMENT-SIGNATURE": b64 },
-      body: JSON.stringify(Object.assign({}, testBody, { payment: b64 }))
+      body: JSON.stringify(Object.assign({}, testBody, { payment: b64 })),
+      noAuth
     });
     if (paid.status !== 201) { fail("Pengiriman bayar dijawab " + paid.status + ": " + JSON.stringify(paid.body).slice(0, 500)); return; }
     const test = paid.body.test || paid.body;
@@ -225,6 +232,7 @@ $("run").onclick = async () => {
     $("result").innerHTML = '<span class="ok"><b>Tes sandbox berhasil dibuat.</b></span><br>' +
       "ID tes: <code>" + (test.id || test.test_id || "(lihat log)") + "</code><br>" +
       (paid.body.access_token ? "Access token (simpan/screenshot): <code>" + paid.body.access_token + "</code><br>" : "") +
+      (noAuth ? 'Tes ini dibuat <b>tanpa key</b> (jalur pembayaran x402 murni). ' : '') +
       'Tes berjalan simulasi ±7 menit menuju status live. Setelah itu cek poin di <a href="https://app.decalabs.ai/rewards" target="_blank" rel="noopener">app.decalabs.ai/rewards</a> — misi +30 seharusnya tercentang.';
   } catch (e) {
     fail("Terhenti: " + (e.message || e));
