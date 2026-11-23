@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DECA Sandbox — Tanda Tangan x402 (Base Sepolia)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; line-height: 1.5; color: #1a1a1a; }
+  h1 { font-size: 20px; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin: 14px 0; }
+  .warn { background: #fff8e1; border-color: #f0d060; }
+  .ok { color: #137333; } .err { color: #b3261e; }
+  button { font-size: 16px; padding: 10px 18px; border-radius: 8px; border: 0; background: #1a73e8; color: #fff; cursor: pointer; }
+  button:disabled { background: #9db8dd; cursor: default; }
+  input { width: 100%; font-size: 15px; padding: 9px; border: 1px solid #bbb; border-radius: 8px; box-sizing: border-box; }
+  code, .mono { font-family: ui-monospace, monospace; word-break: break-all; }
+  #log { background: #111; color: #d6ffd6; border-radius: 10px; padding: 12px; font-family: ui-monospace, monospace; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; min-height: 90px; }
+  a { color: #1a73e8; }
+  .step { font-weight: 600; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<h1>DECA Sandbox — Tanda Tangan x402</h1>
+<p>Halaman ini menjalankan <b>satu</b> misi DECA Rewards: <i>Try a test in the API sandbox</i> (+30 poin).
+Pembayarannya <b>1 test USDC di Base Sepolia (testnet)</b> ke dompet resmi DECA
+<code>0x7FB30eD8D7a7B45EE7b98903d94D87D1B9C3DaD2</code> (decalabs.base.eth). Bukan mainnet, bukan uang asli.</p>
+
+<div class="card warn">
+<b>Pengaman otomatis:</b> halaman ini menolak melanjutkan bila server meminta jaringan selain Base Sepolia,
+token selain USDC testnet resmi Circle (<code>0x036CbD53842c5426634e7929541eC2318f3dCF7e</code>),
+jumlah selain tepat 1 USDC, atau penerima selain dompet resmi DECA di atas.
+API key hanya dipakai dari halaman ini ke <code>app.decalabs.ai</code> dan tidak disimpan.
+</div>
+
+<div class="card">
+  <div class="step">Langkah 1 — API key DECA Anda</div>
+  <p>Salin API key bernama <b>Sandbox test</b> dari
+  <a href="https://app.decalabs.ai/developers" target="_blank" rel="noopener">app.decalabs.ai/developers</a>,
+  lalu tempel di sini:</p>
+  <input id="apikey" type="password" placeholder="deca_sk_…" autocomplete="off">
+</div>
+
+<div class="card">
+  <div class="step">Langkah 2 — Sambungkan OKX (wallet testnet)</div>
+  <p><button id="connect">Sambungkan OKX</button></p>
+  <p id="walletinfo">Belum tersambung. Alamat yang diharapkan: <code>0x91aaaa4e70a76eb2c9f34b23c20e6e0761112560</code></p>
+  <p id="balanceinfo"></p>
+</div>
+
+<div class="card">
+  <div class="step">Langkah 3 — Jalankan &amp; tanda tangani</div>
+  <p><button id="run" disabled>Jalankan Tes Sandbox &amp; Minta Tanda Tangan</button></p>
+  <p>Urutan di dalamnya: ambil ide → minta quote (gratis) → minta tes sandbox → OKX menampilkan permintaan
+  tanda tangan EIP-712 (di situlah Anda mengetuk <b>Sign</b>) → hasil dikirim ke DECA → tes sandbox live ±7 menit.</p>
+  <p id="result"></p>
+</div>
+
+<div id="log">Log akan muncul di sini…</div>
+
+<script>
+const API = "https://app.decalabs.ai/api/agent";
+const EXPECT = {
+  network: "eip155:84532",
+  asset: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+  amount: "1000000",
+  payTo: "0x7fb30ed8d7a7b45ee7b98903d94d87d1b9c3dad2",
+  chainIdHex: "0x14a34",
+  chainId: 84532
+};
+const IDEMPOTENCY_KEY = crypto.randomUUID();
+let account = null;
+
+const $ = (id) => document.getElementById(id);
+function log(msg) {
+  const t = new Date().toLocaleTimeString("id-ID");
+  const el = $("log");
+  if (el.textContent.startsWith("Log akan muncul")) el.textContent = "";
+  el.textContent += "[" + t + "] " + msg + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+function fail(msg) { log("BERHENTI: " + msg); $("result").innerHTML = '<span class="err">' + msg + "</span>"; }
+
+async function api(path, opts = {}) {
+  const key = $("apikey").value.trim();
+  const headers = Object.assign({ "content-type": "application/json" }, opts.headers || {});
+  if (key) headers["authorization"] = "Bearer " + key;
+  const res = await fetch(API + path, Object.assign({}, opts, { headers }));
+  let body = null;
+  try { body = await res.json(); } catch (e) { /* no json */ }
+  return { status: res.status, headers: res.headers, body };
+}
+
+async function checkBalance() {
+  if (!account) return;
+  const data = "0x70a08231" + "000000000000000000000000" + account.slice(2).toLowerCase();
+  const raw = await ethereum.request({ method: "eth_call", params: [{ to: EXPECT.asset, data }, "latest"] });
+  const usdc = Number(BigInt(raw)) / 1e6;
+  $("balanceinfo").innerHTML = "Saldo test USDC (Base Sepolia): <b>" + usdc + " USDC</b>" +
+    (usdc < 1 ? ' — <span class="err">kurang dari 1.</span> Ambil dulu gratis di <a href="https://faucet.circle.com" target="_blank" rel="noopener">faucet.circle.com</a> (pilih USDC + Base Sepolia, alamat Anda di atas), lalu muat ulang halaman ini.' : ' — <span class="ok">cukup untuk misi ini.</span>');
+}
+
+$("connect").onclick = async () => {
+  try {
+    if (!window.ethereum) { fail("OKX Web3 tidak terdeteksi di browser ini. Buka halaman ini di Chrome dengan ekstensi OKX Web3 aktif."); return; }
+    const accs = await ethereum.request({ method: "eth_requestAccounts" });
+    account = accs[0];
+    let chain = await ethereum.request({ method: "eth_chainId" });
+    if (chain !== EXPECT.chainIdHex) {
+      log("Jaringan wallet: " + chain + " — meminta pindah ke Base Sepolia (84532)…");
+      try {
+        await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: EXPECT.chainIdHex }] });
+      } catch (e) {
+        if (e && e.code === 4902) {
+          await ethereum.request({ method: "wallet_addEthereumChain", params: [{
+            chainId: EXPECT.chainIdHex, chainName: "Base Sepolia",
+            nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+            rpcUrls: ["https://sepolia.base.org"],
+            blockExplorerUrls: ["https://sepolia.basescan.org"]
+          }] });
+        } else { throw e; }
+      }
+      chain = await ethereum.request({ method: "eth_chainId" });
+    }
+    $("walletinfo").innerHTML = "Tersambung: <code>" + account + "</code> · jaringan: <b>" + chain + "</b>" +
+      (chain === EXPECT.chainIdHex ? ' <span class="ok">(Base Sepolia ✓)</span>' : ' <span class="err">(bukan Base Sepolia)</span>');
+    if (chain === EXPECT.chainIdHex) { $("run").disabled = false; await checkBalance(); }
+  } catch (e) { fail("Gagal menyambung: " + (e.message || e)); }
+};
+
+$("run").onclick = async () => {
+  $("run").disabled = true;
+  try {
+    const key = $("apikey").value.trim();
+    if (!key) { fail("API key belum ditempel (Langkah 1)."); $("run").disabled = false; return; }
+    if (!account) { fail("Wallet belum tersambung (Langkah 2)."); $("run").disabled = false; return; }
+
+    log("Mengambil ide dari DECA…");
+    const ideas = await api("/ideas?limit=5");
+    if (ideas.status !== 200) { fail("get_ideas gagal: " + JSON.stringify(ideas.body)); return; }
+    const list = ideas.body.ideas || ideas.body.items || ideas.body || [];
+    const idea = Array.isArray(list) ? list[0] : null;
+    const ideaId = idea && (idea.id || idea.idea_id);
+    if (!ideaId) { fail("Tidak menemukan idea_id pada respons: " + JSON.stringify(ideas.body).slice(0, 300)); return; }
+    log("Ide dipakai: " + ideaId + (idea.name ? " — " + idea.name : ""));
+
+    log("Meminta quote (gratis)…");
+    const quote = await api("/quote", { method: "POST", body: JSON.stringify({ idea_id: ideaId }) });
+    if (quote.status !== 200) { fail("quote_test gagal (" + quote.status + "): " + JSON.stringify(quote.body)); return; }
+    const q = quote.body.quote || quote.body;
+    const quoteId = q.quote_id || q.id;
+    const options = q.options || [];
+    const optNames = options.map(o => (typeof o === "string" ? o : o.name || o.id || o.option));
+    const option = optNames.includes("signal") ? "signal" : (optNames[0] || "signal");
+    if (!quoteId) { fail("quote_id tidak ada pada respons: " + JSON.stringify(quote.body).slice(0, 300)); return; }
+    log("Quote: " + quoteId + " · opsi: " + option);
+
+    const testBody = { quote_id: quoteId, option, sandbox: true, idempotency_key: IDEMPOTENCY_KEY };
+    log("Meminta tes sandbox (mengharapkan jawaban 402 berisi permintaan bayar)…");
+    const ask = await api("/tests", { method: "POST", body: JSON.stringify(testBody) });
+    let required = ask.body;
+    if (!required || !required.accepts) {
+      const h = ask.headers.get("PAYMENT-REQUIRED");
+      if (h) { try { required = JSON.parse(atob(h)); } catch (e) { /* ignore */ } }
+    }
+    if (ask.status !== 402 || !required || !required.accepts || !required.accepts[0]) {
+      fail("Jawaban bukan 402 x402 seperti yang diharapkan (" + ask.status + "): " + JSON.stringify(ask.body).slice(0, 400)); return;
+    }
+    const acc = required.accepts[0];
+    log("Permintaan bayar diterima: " + JSON.stringify(acc));
+
+    // ---- PENGAMAN: verifikasi persis seperti dokumentasi resmi DECA ----
+    const problems = [];
+    if (acc.network !== EXPECT.network) problems.push("network=" + acc.network);
+    if ((acc.asset || "").toLowerCase() !== EXPECT.asset) problems.push("asset=" + acc.asset);
+    if (String(acc.amount) !== EXPECT.amount) problems.push("amount=" + acc.amount);
+    if ((acc.payTo || "").toLowerCase() !== EXPECT.payTo) problems.push("payTo=" + acc.payTo);
+    if (acc.scheme !== "exact") problems.push("scheme=" + acc.scheme);
+    if (problems.length) { fail("Permintaan bayar TIDAK COCOK dengan dokumentasi resmi (" + problems.join(", ") + "). Dibatalkan demi keamanan."); return; }
+    log("Pengaman lolos: 1 test USDC · Base Sepolia · penerima resmi DECA ✓");
+
+    const nonceBytes = crypto.getRandomValues(new Uint8Array(32));
+    const nonce = "0x" + Array.from(nonceBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+    const now = Math.floor(Date.now() / 1000);
+    const authorization = {
+      from: account, to: acc.payTo, value: String(acc.amount),
+      validAfter: "0", validBefore: String(now + (acc.maxTimeoutSeconds || 300)), nonce
+    };
+    const typedData = {
+      types: {
+        EIP712Domain: [
+          { name: "name", type: "string" }, { name: "version", type: "string" },
+          { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }
+        ],
+        TransferWithAuthorization: [
+          { name: "from", type: "address" }, { name: "to", type: "address" },
+          { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" },
+          { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" }
+        ]
+      },
+      primaryType: "TransferWithAuthorization",
+      domain: {
+        name: (acc.extra && acc.extra.name) || "USDC",
+        version: (acc.extra && acc.extra.version) || "2",
+        chainId: EXPECT.chainId, verifyingContract: acc.asset
+      },
+      message: authorization
+    };
+    log("Meminta tanda tangan di OKX — periksa layarnya: TransferWithAuthorization, 1 USDC testnet, ke " + acc.payTo + " …");
+    const signature = await ethereum.request({
+      method: "eth_signTypedData_v4",
+      params: [account, JSON.stringify(typedData)]
+    });
+    log("Tanda tangan diterima ✓ Mengirim pembayaran ke DECA…");
+
+    const payload = { x402Version: 2, scheme: "exact", network: EXPECT.network, payload: { signature, authorization } };
+    const b64 = btoa(JSON.stringify(payload));
+    const paid = await api("/tests", {
+      method: "POST",
+      headers: { "PAYMENT-SIGNATURE": b64 },
+      body: JSON.stringify(Object.assign({}, testBody, { payment: b64 }))
+    });
+    if (paid.status !== 201) { fail("Pengiriman bayar dijawab " + paid.status + ": " + JSON.stringify(paid.body).slice(0, 500)); return; }
+    const test = paid.body.test || paid.body;
+    log("BERHASIL. Tes sandbox dibuat: " + JSON.stringify(test).slice(0, 300));
+    $("result").innerHTML = '<span class="ok"><b>Tes sandbox berhasil dibuat.</b></span><br>' +
+      "ID tes: <code>" + (test.id || test.test_id || "(lihat log)") + "</code><br>" +
+      (paid.body.access_token ? "Access token (simpan/screenshot): <code>" + paid.body.access_token + "</code><br>" : "") +
+      'Tes berjalan simulasi ±7 menit menuju status live. Setelah itu cek poin di <a href="https://app.decalabs.ai/rewards" target="_blank" rel="noopener">app.decalabs.ai/rewards</a> — misi +30 seharusnya tercentang.';
+  } catch (e) {
+    fail("Terhenti: " + (e.message || e));
+    $("run").disabled = false;
+  }
+};
+</script>
+</body>
+</html>
